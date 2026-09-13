@@ -11,7 +11,7 @@ user-invocable: true
 
 | 资源 | 位置 |
 |---|---|
-| 参考实现（含可复现管线与全部实测数字） | `D:\dsh-mb-mod`（公开：https://github.com/tridkx/bannerlord-valerie-harmon-rebuild ） |
+| 参考实现（含可复现管线与全部实测数字） | `D:\dsh-mb-mod`（常驻本地；同名 GitHub 仓库已转私有，不再给公开链接） |
 | `.tpac` 工具集（打包器 + Python 工具 + 格式文档） | `D:\mb-tools`（公开：https://github.com/tridkx/bannerlord-tpac-toolkit ） |
 | 现成对照 mod（官方 Modding Kit 产出、显示正常） | `<游戏>\Modules\LVBU and DIAOCHAN\` |
 | 游戏 | `D:\SteamLibrary\steamapps\common\Mount & Blade II Bannerlord` |

@@ -61,7 +61,7 @@ DSH 在会话启动时扫描该目录；装好后 skill 名就是 `bannerlord-ch
 
 | 仓库 | 内容 |
 |---|---|
-| [bannerlord-valerie-harmon-rebuild](https://github.com/tridkx/bannerlord-valerie-harmon-rebuild) | 参考工程：完整的可复现管线脚本（权重提取/骨骼映射/重定向/形状体检/渲染验收/资产构建）+ PROGRESS.md 全部实测数字 |
+| bannerlord-valerie-harmon-rebuild（已转私有，仅本地 `D:\dsh-mb-mod`） | 参考工程：完整的可复现管线脚本（权重提取/骨骼映射/重定向/形状体检/渲染验收/资产构建）+ PROGRESS.md 全部实测数字 |
 | [bannerlord-tpac-toolkit](https://github.com/tridkx/bannerlord-tpac-toolkit) | `.tpac` 读写/构建/校验工具集（C# CLI + Python 交叉验证 + 格式文档），本 skill 的所有 `mbtool` 命令来自它 |
 
 > 两个仓库与本 skill 都**不含任何游戏素材**（`.mesh/.tex/.tpac` 与提取结果均已排除）。
