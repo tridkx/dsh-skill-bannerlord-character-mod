@@ -11,7 +11,6 @@ user-invocable: true
 
 | 资源 | 位置 |
 |---|---|
-| 参考实现（含可复现管线与全部实测数字） | `D:\dsh-mb-mod`（常驻本地；同名 GitHub 仓库已转私有，不再给公开链接） |
 | `.tpac` 工具集（打包器 + Python 工具 + 格式文档） | `D:\mb-tools`（公开：https://github.com/tridkx/bannerlord-tpac-toolkit ） |
 | 现成对照 mod（官方 Modding Kit 产出、显示正常） | `<游戏>\Modules\LVBU and DIAOCHAN\` |
 | 游戏 | `D:\SteamLibrary\steamapps\common\Mount & Blade II Bannerlord` |
@@ -48,7 +47,7 @@ Modules\<ModName>\
 | 材质分组与贴图通道 | 决定材质与贴图怎么拆 |
 | 面数 / 部件数 / LOD | 决定性能与是否拆件 |
 
-常用脚本：`D:\dsh-mb-mod\tools\intake_report.py`（面数/材质/UV/缝合片/骨架一览）。
+常用脚本：体检用的 intake report 脚本（面数/材质/UV/缝合片/骨架一览）。
 
 ---
 
@@ -264,4 +263,4 @@ $MB metacheck pack0.tpac                  # 校验和 + metadata 往返
 $MB segcheck  pack0.tpac <资产名>          # 逐段字节比对（写入器是否保真）
 ```
 
-完整工程（含全部脚本与实测数字）：见 `D:\dsh-mb-mod\PROGRESS.md` 与 README。
+以上命令覆盖了绝大部分排查；剩下的（逐段字节比对、材质差集）按 §10 的方法论自己取证。
