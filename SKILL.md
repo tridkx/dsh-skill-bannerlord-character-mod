@@ -545,3 +545,194 @@ names = ['Colors1','Colors2','Uv1','Uv2','Positions','Positions2','Normals','Tan
 ```
 
 以上命令与工具覆盖了绝大部分排查；剩下的按 §10 的方法论自己取证。
+
+---
+
+## 12. ★★ 游戏动画的离线预览（不必进游戏就能看"动起来"）
+
+**这是本 skill 最值钱的一节之一。** 以前离线只能套**自己手写的合成姿势**
+（`pose_test.py` 的 walk/knee/stride）——手的角度、裙摆摆动、肩胯关系全是猜的，
+所以"预览图跟游戏内表现对不上"，只能反复进游戏。**现在可以直接套游戏真正在播的动画。**
+
+### 12.1 动画是能离线拿到的（`mbtool` 的 anim 组命令）
+
+TpacTool.Lib **早就有完整的** `SkeletalAnimation` / `AnimationDefinitionData` /
+`OptimizedAnimation` 解析，只是从没暴露入口。给 `mbtool` 加了 5 个命令
+（实现在 `mbtool/src/Anim.cs`）：
+
+```
+mbtool animlist  <animations.tpac> [filter]        # 4052 个骨骼动画
+mbtool cliplist  <animation_clips.tpac> [filter]   # 6170 个动画剪辑
+mbtool clip      <animation_clips.tpac> <name>     # 剪辑元数据 + 它引用的动画 GUID
+mbtool anim      <animations.tpac> <name|guid> <out.json> [skeletons.tpac]
+mbtool skeljson  <skeletons.tpac> <name> <out.json>
+```
+
+链路：`AnimationClip`（名字）→ `.Animation` GUID → `SkeletalAnimation` →
+`.Definition.Data` → 每根骨的四元数关键帧。
+
+### 12.2 装备页/物品栏用的那几个动作
+
+`Modules\Native\ModuleData\action_sets.xml` 的 `as_human_warrior` 里有：
+
+| 动作类型 | 动画名 | 说明 |
+|---|---|---|
+| `act_inventory_idle_start` | `inventory_idle_start` | 进装备页的过渡 |
+| `act_inventory_idle` | `inventory_idle` | **装备页待机（cyclic，15s）** |
+| `act_inventory_cloth_equip` | `inventory_cloth_equip` | 换衣 |
+| `act_inventory_glove_equip` | `inventory_glove_equip` | 换手套 |
+
+### 12.3 ★★★ 三个致命 bug（每个都能让模型炸成一团，且都不容易发现）
+
+**这三个是连着踩出来的，共同特点是「骨骼图上完全正常、只有顶点会炸」。**
+
+| # | bug | 为什么极难发现 |
+|---|---|---|
+| 1 | **坐标变换的转置写反**：行向量约定下 `V_arm = V_eng @ C` 应为 `@ C.T` | **t=0 时 Δ=I，LBS 退化成恒等变换，坐标变换"进去再出来"正好抵消** ⇒ 网格完美还原、偏移 0.00mm、所有基于 t=0 的自检全绿。一进动画就露馅：实测头部顶点被镜像到 y=**−1.55**（骨架 head 在 +1.57），`\|v−rest\|` 高达 **3 米** |
+| 2 | **世界增量方向写反**：`R(q0)·R(qt)ᵀ` 应为 `R(qt)·R(q0)ᵀ` | 两者 **trace 相同 ⇒ 旋转角完全相同**（pelvis 都是 32.30°），只有**轴反向**。所以任何用 `acos((tr−1)/2)` 的角度判据都区分不出来 |
+| 3 | **旋转沿骨链重复累积** | 游戏存的是**世界空间绝对朝向**，Δ 已含父链贡献；再累积一次会重复旋转。症状是**头不跟随脖子**：`head(13)` 与 `neck(12)` 的变换差 **0.87m** |
+
+> ★ 判据 #2 的实测证据：`head` 材质上一条 **2.5mm 的边被拉到 225mm（90 倍）**，
+> 两端权重 `(13,0.64)/(12,0.34)` 与 `(12,0.56)/(13,0.39)` **几乎镜像**（本该重合）。
+> 定位手法：对每个三角形/边取端点权重，看是不是"权重镜像但结果分离"。
+
+### 12.4 ★★★ 判据的选择（这一节的教训比结论更重要）
+
+排查过程中先后用过四个判据，**前三个都有致命盲区**：
+
+| 判据 | 盲区 |
+|---|---|
+| 关节位置（两腿在 X 分开、脚在地上、头最高） | 用 `abs()` 取间距就**看不出左右翻转**；且完全不看旋转 |
+| 父子骨**相对旋转**偏差 | **旋转角是相似不变量** ⇒ 对坐标变换完全不敏感，24 个 coord 并列同名次 |
+| 顶点**位移大小** | 角色真转身 32° 本来就会产生几百 mm 位移，**大 ≠ 错** |
+| ★ **网格边长/三角形拉伸** | **唯一真正硬的判据**：LBS 是刚体变换的凸组合，正确约定下只会平滑变化，不会出现 90 倍尖刺 |
+
+**并且所有"t=0 自检"都是平凡检验**（Δ=I 时 LBS 恒等，无论权重/坐标怎么错都不动）——
+**必须用 t>0 的帧做判据。**
+
+最终解法：`solve_anim_coord2.py` 穷举「24 个立方体旋转 × 增量方向 × 累积公式」，
+用边长拉伸 p999 排序。修好坐标转置后 **p999 从 20.9 降到 1.79**（正常水平）。
+
+### 12.5 解出来的约定（可直接抄）
+
+```
+q_i(t)  = 骨骼 i 在**游戏模型空间**的绝对朝向
+q_i(0)  = 所有动画共有的那个"骨骼 rest 朝向"（pelvis 恒为 ~90° 绕 -Y）
+          ★ 实测 3 个互不相关的动画（inventory_idle / inventory_movements /
+            barmaid_walk_forward）的 q(0) 完全相同 ⇒ 它是 rest 朝向，不是姿势
+Δ_i     = R(q_i(t)) · R(q_i(0))⁻¹            # 世界增量
+Δ_i    ← COORD · Δ_i · COORDᵀ                # 换到 armature 空间
+W_i     = Δ_i · Rrest_i                       # 右乘 rest 朝向
+joint_i = joint_p + W_p · (Rrest_pᵀ · (rest_i − rest_p))
+          ★ **不沿骨链累积**（abs）—— 穷举结果前 16 名全是 abs
+COORD   = [[0,0,1],[0,-1,0],[1,0,0]]
+```
+
+LBS 全程在 **armature 空间**做（动画四元数就是在那里表达的），只在进出口各转一次：
+`arm = C @ eng`，`C = [[1,0,0],[0,0,1],[0,-1,0]]`（**行向量右乘 Cᵀ**，见 bug #1）。
+
+### 12.6 工具（都在 `D:\mb-tools\preview\`）
+
+| 脚本 | 作用 |
+|---|---|
+| `probe_anim_space.py` | 探针：动画四元数与 rest 的关系（角度谱） |
+| `solve_anim_convention.py` | 第一版搜索（判据弱，仅留档） |
+| `solve_anim_coord.py` | 相对旋转判据（**对坐标不敏感，教训**） |
+| `solve_anim_coord2.py` | ★ **边长拉伸判据 + 24 坐标穷举**，最终定案 |
+| `diag_lbs.py` / `diag_anim_bones.py` | 按骨/按材质组统计位移与拉伸，定位是哪根骨炸了 |
+| `anim_pose.py` | ★ 套游戏动画 → 逐帧 npz（**核心**） |
+| `sketch_anim_frames.py` | 骨架逐帧图，验证"像不像走路" |
+| `mb-preview.py` | ★ **CLI**：一条命令 出序列图 + GIF（给 AI 用） |
+| `mbpreview_gui.py` | ★ **GUI**：pyglet 实时播放，拖拽/滚轮/数字键切动画（给人用） |
+
+**渲染复用工程自带的 `render.py`**（`--mode=<work 下的子目录>` 已支持任意目录），
+贴图/UV 翻转/多视角/取景都沿用已验证的管线，**不要另写一套**。
+
+**GUI 用固定管线**（`glVertexPointer`/`glNormalPointer` + `GL_LIGHT0`）而不是 GLSL：
+pyglet 1.5 上写 shader 要手工摆弄 `glShaderSource` 的 ctypes 参数，容易踩坑；
+十万级三角形固定管线完全够用。预计算 N 帧后纯播放，避免 Python 实时 LBS 卡顿。
+
+### 12.7 ★★ 从**最终 .tpac** 读回来看（补上 §10.8 那个坑）
+
+`work/posed/*.npz` 是中间产物，打包环节的两个坑（`.mgeo` 同名覆盖、权重没量化成 0..255）
+**只有从最终文件才看得见**。现在有一条完整链路，不需要那个 mod 的工程目录：
+
+```bash
+mbtool exportmod <pack0.tpac> <outDir>          # 几何 + 材质 + 贴图原始 BC
+python preview/import_mod.py --export <outDir> --out <npzDir> --tex-out <pngDir>
+python preview/mbpreview_gui.py --posed-dir <npzDir> --tex-dir <pngDir> --anim-dir anims
+```
+
+吊销判据（`import_mod.py` 自己会打印）：**每顶点 4 个 u8 权重之和 == 255 的占比必须 100%**、
+骨骼索引 ≤27。实测 `mb-xianjian7` 的 pack0：100.00% / max 26，且
+**逐材质面数与中间产物完全一致**（差值 4821 面恰好 = 工程 `DROP_MATS` 有意剔除的隐藏片），
+贴图解出后与打包前 PNG **逐像素平均差 0.81/255**（BC1 有损属正常）——
+这才叫"验证了最终交付的那个文件"。
+
+`exportmod` 的产物：`pack.json`（清单）+ `geo/*.bin`（自描述顶点流，含骨索引/骨权重）
++ `tex/*.bin`（贴图原始 BC 字节 + mip 表）。解码复用 `py/bcencode.py`。
+
+### 12.8 ★★★ 预览器的四个致命细节（都会让"颜色/贴图看起来全错"）
+
+| # | 细节 | 判据与做法 |
+|---|---|---|
+| 1 | **UV 的 V 轴：OpenGL 侧不翻** | 本源是 **top-origin**（v=0 = 贴图**顶行**，见工程 `build_assets.py` 的实测）。`glTexImage2D` 的**第一行数据落在 t=0** ⇒ 把 PNG **原样上传**，v=0 才对上顶行。写成"OpenGL 的 v=0 在底行"而翻图 = **五官整体上下错位、裙摆花纹错乱**。⚠️ Blender 侧相反（`render.py` 默认翻），**两边结论不能互抄**。分不清就用 `--unlit` 看贴图原色 |
+| 2 | **固定管线的光量要配平到 ≈1.0** | 颜色 = 贴图 ×(ambient + diffuse·N·L)。实测 ambient 0.55 + diffuse 0.95 = 迎光面放大 1.5 倍，把深棕头发 [74,60,49] 抬成 [111,90,74] ⇒ 看着像"**白灰色头发**"，而贴图明明是深棕。改成 0.40 + 0.60 + 反向补光 0.22 |
+| 3 | **镂空贴图要 alpha bleed + mipmap** | 发丝类贴图 **alpha 中位数就是 0**，透明区 RGB 往往是白色；只上传 mip0 ⇒ 缩小时严重走样（"头发上全是噪点"），开 mipmap 又会把白色平均进来（"头发发白"）。做法：**先把透明区 RGB 填成不透明像素的中位色**（`flatten_transparent`），再 `glGenerateMipmap` + `GL_LINEAR_MIPMAP_LINEAR` |
+| 4 | **贴图映射的键空间必须是"子网格组名"** | tpac 导入的组名是 `xj7_yue_body.0`，工程中间产物的组名是 `00:MI_MAJ02_01_hair`，而**源材质名 → 贴图**的映射只存在于工程脚本里（`render.py` 的 `MAT_TABLE`）。查表顺序：组名 → 材质名 → `__materials__[材质名]`。**猜不中时绝不能静默退到"关键词表第一个词"** —— 实测那样会让十几个组共用 `cloth1` 一张图 |
+
+**工程侧的映射表要用 `ast` 解析，不能 import**（脚本顶部就是 `import bpy`），
+而且 `MAT_TABLE = {"yue": {...}, "bai": {...}}` 是**嵌套的** —— 只取"最大的那个字典"
+会拿到条目更多的那个角色、另一个角色的材质一个也配不上。
+
+同一个 `.tpac`/工程里，"源材质名 → 贴图"和"要丢弃的材质"（`DROP_MATS`：走光保护片
+`M_ProxyHide`、眼遮挡、泪线）都值得解析出来缓存成 `work/texmap_project.json`。
+
+### 12.9 播放速度：用 `AnimationClip.duration`，别拍脑袋定 fps
+
+动画 `t` 轴（0..1267）与秒的换算**不在数据里**，唯一有据可查的是 clip 自己声明的时长
+（`mbtool cliplist` 的 `dur`，秒），而 clip 引用的正是同一个动画 guid：
+
+```
+AnimationClip  inventory_idle  dur=15.000  anim=ff08c5be-…  flags=[cyclic]
+```
+
+⇒ `播放速率 = t_end / dur`。实测 walk_barmaid 40 t/1.30 s = 30.8、inv_movements 300/5.00 = 60、
+inventory_idle 1267/15.00 = 84.5。**这不是引擎帧率**，只是"把动画铺满 clip 时长"的比例 ——
+有它预览的**节奏**才和游戏一致。长动画（15 s 待机）整段采 48 帧 = 每秒 3 帧，很卡 ⇒
+只采前几秒（`--seconds 4`）。
+
+（顺带：`anim_inventory_movements` 就是 `inventory_cloth_equip` / `glove_equip` 用的动画，
+`mbtool clip` 对 guid 即可确认 —— 别以为"cloth_equip 还没 dump"。）
+
+### 12.10 两个纯 Python/工具链的小坑（排查时极费时间）
+
+| 坑 | 现象 | 做法 |
+|---|---|---|
+| `np.linalg.norm(X)` 漏 `axis=2` | 自检打印"位移 **67 米**"，看着像模型炸了，其实只是统计写错（返回的是整个数组的**标量范数**） | 逐顶点位移一律 `np.linalg.norm(X, axis=2)`；"函数没错、单测也过"不代表那条路径真的被执行 |
+| `render.py` 只认**本工程**的材质命名 | 从任意 tpac 导入的网格喂给它 → `过滤后没有任何材质组可渲染`，一张图都出不来 | CLI 出图仍走 `render.py`（工程产物）；**任意 mod 出图用 GUI 的 `--record`**（自带渲染管线，不经过 render.py）。另外 `faces` 必须是 `(M,3)` 二维，展平一维会被它判成"形状不对" |
+
+### 12.11 ★★ 预览器 GUI 的两个"窗口能开、但人物一动不动"的坑
+
+这类 bug 极难从现象反推（窗口明明开着、模型也在，就是不动、随后 Windows 报"无响应"），
+但**都能用一条命令变成可测量的数字**：
+
+```bash
+python mbpreview_gui.py --project <工程> --run-seconds 8
+# 正常输出示例：draw 469 次（58.6 fps）、upload 0.33ms/次（占 1.9%）、"帧号在动"
+# 卡死时：什么都打不出来（或一直跑到被 timeout 杀掉）
+```
+
+| # | 坑 | 现象 | 判据 / 修法 |
+|---|---|---|---|
+| 1 | **帧推进累积器被初始化成墙上时间** | `self.last = time.time()`（≈1.7e9），而 `tick` 里是 `while self.last >= step: self.last -= step`（step ≈ 1/84 s）⇒ **第一次 tick 就进入要迭代 1.4e11 次的死循环**，事件循环再也回不来 | 累积器一律从 `0.0` 起；补帧 `while` 加步数上限（落后太多就丢弃、不追赶）。**注意：这个 bug 从第一版就在，而它从未被真正运行过** ——"代码看起来对"完全不等于跑过 |
+| 2 | **调了不存在的 pyglet API** | pyglet **1.5.31** 的 `Win32Window` **没有 `invalidate()` 方法**（只有 `invalid` 属性）。请求重绘写成 `win.invalidate()` ⇒ 每帧抛 `AttributeError` ⇒ 画面永不刷新 + 高频异常拖死 UI | 写 `win.invalid = True`。三种写法实测对照（`_probe_pyglet.py`）：`invalid=True` → tick 88/on_draw 89 ✅；手动 `switch_to+dispatch+flip` → on_draw **179**（双倍绘制）；完全不请求 → 靠 `EventLoop` 的 `redraw_all` 兜住但语义不保证 |
+
+**附加要求**：事件回调里的异常**绝不能抛出去** —— clock 回调是在 `EventLoop.idle` 内部执行的，
+一次异常就打断整个 idle ⇒ 窗口永远刷不动。上传/绘制都该 try 住，出错就暂停并打印原因。
+
+**别用 `pyglet.gui` / `pyglet.shapes` 做按钮**：它们走 GLSL shader，而三维部分通常是固定管线
+（`glVertexPointer` + `GL_LIGHT0`）。用 `pyglet.graphics.Batch`（客户端顶点数组）+ `pyglet.text.Label`
+自绘按钮条即可；**画 UI 前必须清掉三维留下的 `GL_TEXTURE_2D` / `GL_ALPHA_TEST` / `GL_CULL_FACE`**，
+否则矩形会被上一张绑定的贴图调制、被 alphaTest 剪掉 —— 表现是"按钮文字在、底色不见了"。
+HUD 文字也必须和按钮**同一个正交投影**里画，否则透视矩阵会把屏幕坐标投到屏幕外（"HUD 完全看不见"）。
