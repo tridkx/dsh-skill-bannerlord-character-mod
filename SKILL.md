@@ -731,6 +731,29 @@ python mbpreview_gui.py --project <工程> --run-seconds 8
 **附加要求**：事件回调里的异常**绝不能抛出去** —— clock 回调是在 `EventLoop.idle` 内部执行的，
 一次异常就打断整个 idle ⇒ 窗口永远刷不动。上传/绘制都该 try 住，出错就暂停并打印原因。
 
+### 12.12 ★★ "同一个功能，在这个角色上好好的、换个人就失效" —— 先怀疑 GL 状态泄漏
+
+实测症状：**月清疏按 B 能看见骨骼，切到白茉晴一根线都没有**（代码路径完全一样，
+`joints` 数据也逐位相同）。原因是骨骼是在**材质组渲染之后**追加绘制的，
+直接继承了**最后一个材质组**留下的状态：
+
+* 发丝/睫毛那种镂空材质会 `glEnable(GL_ALPHA_TEST)` + `glAlphaFunc(GREATER, 0.2745)`
+  ⇒ 骨骼线被当成"低 alpha 像素"整条剪掉；
+* `GL_LIGHTING` 还开着 ⇒ 顶点色被光照压暗；
+* `GL_TEXTURE_2D` 还绑着上一张贴图 ⇒ 顶点色被调制。
+
+而 `groups` 的顺序来自 `np.unique(face_group)` —— **不同角色不一样**，所以
+"最后一个材质组"是谁也跟着变 ⇒ 表现成**跟角色绑定的怪 bug**，极易误判成数据问题。
+
+**做法**：任何"追加绘制"（骨骼、坐标轴、包围盒、UI）进入前**显式清状态**
+（`ALPHA_TEST / TEXTURE_2D / BLEND / LIGHTING / CULL_FACE`），退出时复位，
+别把烂摊子留给下一个绘制者。三维绘制函数收尾也统一复位一次。
+
+**判据的选择同样重要**：验证"开了这个功能到底画出东西没有"，要用
+**开/关该功能的 A/B 差异像素**。我一开始按"数橙色像素"统计，把粉色腰带、红色
+配饰一起算进去，得出"bai 的骨骼像素比 yue 还多"的**相反结论**，多绕了一轮。
+（`preview/selftest_bones.py` 就是这条判据的可复跑版本。）
+
 **别用 `pyglet.gui` / `pyglet.shapes` 做按钮**：它们走 GLSL shader，而三维部分通常是固定管线
 （`glVertexPointer` + `GL_LIGHT0`）。用 `pyglet.graphics.Batch`（客户端顶点数组）+ `pyglet.text.Label`
 自绘按钮条即可；**画 UI 前必须清掉三维留下的 `GL_TEXTURE_2D` / `GL_ALPHA_TEST` / `GL_CULL_FACE`**，
