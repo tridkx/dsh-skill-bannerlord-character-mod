@@ -12,7 +12,8 @@ user-invocable: true
 
 | 资源 | 位置 |
 |---|---|
-| `.tpac` 工具集（打包器 + Python 工具 + 格式文档） | `D:\mb-tools`（公开：https://github.com/tridkx/bannerlord-tpac-toolkit ） |
+| `.tpac` 工具集（打包器 + Python 工具 + 格式文档） | `D:\mb-tools`（公开：https://github.com/tridkx/bannerlord-tpac-toolkit ）—— 已不含预览器 |
+| ★ **离线动画预览器**（不开游戏看实机形态；人类 UI + AI 命令行） | `D:\dsh-mb2-anmi-preview`（公开：https://github.com/tridkx/bannerlord-anim-previewer ）—— 见 §12.6 / §12.15 |
 | 现成对照 mod（官方 Modding Kit 产出、显示正常） | `<游戏>\Modules\LVBU and DIAOCHAN\` |
 | 游戏 | `D:\SteamLibrary\steamapps\common\Mount & Blade II Bannerlord` |
 
@@ -584,6 +585,10 @@ mbtool skeljson  <skeletons.tpac> <name> <out.json>
 
 ### 12.3 ★★★ 三个致命 bug（每个都能让模型炸成一团，且都不容易发现）
 
+> 📌 **路线说明**：这三个 bug 都属于「把 `q` 当成世界绝对朝向、然后用 COORD 矩阵去凑」
+> 那条**错误路线**（见 §12.5 的注记）。**采用 §12.15.2 的公式（`q` 就是局部旋转）
+> 根本不会遇到它们** —— 但"为什么它们能骗过 t=0 自检"这个教训仍然通用，值得记。
+
 **这三个是连着踩出来的，共同特点是「骨骼图上完全正常、只有顶点会炸」。**
 
 | # | bug | 为什么极难发现 |
@@ -610,67 +615,100 @@ mbtool skeljson  <skeletons.tpac> <name> <out.json>
 **并且所有"t=0 自检"都是平凡检验**（Δ=I 时 LBS 恒等，无论权重/坐标怎么错都不动）——
 **必须用 t>0 的帧做判据。**
 
-最终解法：`solve_anim_coord2.py` 穷举「24 个立方体旋转 × 增量方向 × 累积公式」，
+最终解法（旧路线）：`solve_anim_coord2.py` 穷举「24 个立方体旋转 × 增量方向 × 累积公式」，
 用边长拉伸 p999 排序。修好坐标转置后 **p999 从 20.9 降到 1.79**（正常水平）。
+> 该脚本随旧预览器一并移除（见 §12.6）。现行实现走 §12.15.2 的公式，
+> 同一判据下的实测水平是 **p99≈1.13 / p999≈1.60**。
 
-### 12.5 解出来的约定（可直接抄）
+### 12.5 姿态约定（★ 本节早期结论有误，正确版见 §12.13 / §12.15）
+
+> ⚠️ **这一节最初写成"`q` 是游戏模型空间的绝对朝向"，后来被 §12.13 推翻。**
+> 当时用「COORD 矩阵 + 求世界增量 + abs 累积」去凑，虽然凑出了能看的画面，
+> 但物理意义是错的 —— 一旦换骨架 / 换动画就会露馅。
+> 保留它是因为"**错在哪、为什么能凑出来**"本身值得记：
+>
+> * 早期写法：`Δ_i = R(q_i(t))·R(q_i(0))⁻¹`，再 `COORD·Δ·COORDᵀ`，再 `·Rrest_i`，
+>   关节位置用 `joint_p + W_p·(Rrest_pᵀ·(rest_i−rest_p))` 且**不沿骨链累积**。
+> * 它之所以"看起来能跑"：`COORD` 那 24 种立方体旋转里恰好有一种能与
+>   "把局部旋转当成绝对朝向"的错误互相抵消，于是姿势对了个大概。
+> * **真正该做的是先承认 `q_i` 是相对父骨的局部旋转**（判据见 §12.13），
+>   那么一切都退化成标准骨架动画，根本不需要这些修补。
+>
+> 下面这段旧推导仅作反例留档 —— **不要照着实现**。
 
 ```
-q_i(t)  = 骨骼 i 在**游戏模型空间**的绝对朝向
-q_i(0)  = 所有动画共有的那个"骨骼 rest 朝向"（pelvis 恒为 ~90° 绕 -Y）
-          ★ 实测 3 个互不相关的动画（inventory_idle / inventory_movements /
-            barmaid_walk_forward）的 q(0) 完全相同 ⇒ 它是 rest 朝向，不是姿势
+（已废弃）
+q_i(t) 被误认为 = 骨骼 i 在游戏模型空间的绝对朝向
 Δ_i     = R(q_i(t)) · R(q_i(0))⁻¹            # 世界增量
 Δ_i    ← COORD · Δ_i · COORDᵀ                # 换到 armature 空间
-W_i     = Δ_i · Rrest_i                       # 右乘 rest 朝向
-joint_i = joint_p + W_p · (Rrest_pᵀ · (rest_i − rest_p))
-          ★ **不沿骨链累积**（abs）—— 穷举结果前 16 名全是 abs
+W_i     = Δ_i · Rrest_i
+joint_i = joint_p + W_p · (Rrest_pᵀ · (rest_i − rest_p))   # abs，不沿链累积
 COORD   = [[0,0,1],[0,-1,0],[1,0,0]]
 ```
 
-LBS 全程在 **armature 空间**做（动画四元数就是在那里表达的），只在进出口各转一次：
-`arm = C @ eng`，`C = [[1,0,0],[0,0,1],[0,-1,0]]`（**行向量右乘 Cᵀ**，见 bug #1）。
+**正确的极简公式**（本项目实测，详见 §12.15）：
 
-### 12.6 工具（都在 `D:\mb-tools\preview\`）
+```
+M_i(t) = M_parent(t) · [ R(q_i(t)) | restLocal_i.translation ]
+根骨额外叠加 rootPosition 平移
+蒙皮矩阵 = M_pose @ inv(M_bind)
+```
+不需要 COORD、不需要求增量、不需要 abs 特殊处理。
 
-| 脚本 | 作用 |
-|---|---|
-| `probe_anim_space.py` | 探针：动画四元数与 rest 的关系（角度谱） |
-| `solve_anim_convention.py` | 第一版搜索（判据弱，仅留档） |
-| `solve_anim_coord.py` | 相对旋转判据（**对坐标不敏感，教训**） |
-| `solve_anim_coord2.py` | ★ **边长拉伸判据 + 24 坐标穷举**，最终定案 |
-| `diag_lbs.py` / `diag_anim_bones.py` | 按骨/按材质组统计位移与拉伸，定位是哪根骨炸了 |
-| `anim_pose.py` | ★ 套游戏动画 → 逐帧 npz（**核心**） |
-| `sketch_anim_frames.py` | 骨架逐帧图，验证"像不像走路" |
-| `mb-preview.py` | ★ **CLI**：一条命令 出序列图 + GIF（给 AI 用） |
-| `mbpreview_gui.py` | ★ **GUI**：pyglet 实时播放，拖拽/滚轮/数字键切动画（给人用） |
 
-**渲染复用工程自带的 `render.py`**（`--mode=<work 下的子目录>` 已支持任意目录），
-贴图/UV 翻转/多视角/取景都沿用已验证的管线，**不要另写一套**。
+### 12.6 ★★ 工具：离线预览器已经是独立项目
 
-**GUI 用固定管线**（`glVertexPointer`/`glNormalPointer` + `GL_LIGHT0`）而不是 GLSL：
-pyglet 1.5 上写 shader 要手工摆弄 `glShaderSource` 的 ctypes 参数，容易踩坑；
-十万级三角形固定管线完全够用。预计算 N 帧后纯播放，避免 Python 实时 LBS 卡顿。
+早期那套 `D:\mb-tools\preview\` 下的预览器（`mbpreview_gui.py` / `mb-preview.py` /
+`anim_pose.py` / `import_mod.py`）**已从 mb-tools 移除**，其技术记录归档在
+新项目的 `docs/legacy-previewer-notes.md`。
+
+现行工具是本项目：
+
+```
+D:\dsh-mb2-anmi-preview          https://github.com/tridkx/bannerlord-anim-previewer
+```
+
+它消费 mb-tools 的三条命令（`exportmod` / `skeljson` / `anim`），自写 WebGL2 渲染，
+**零第三方依赖**，并且同时提供人类界面与 AI 命令行：
+
+| 命令 | 给谁 | 作用 |
+|---|---|---|
+| `preview.bat [mod]` | 人 | 自检 → 烘焙 → 起服务 → 开浏览器 |
+| `mbpreview.bat serve` | 人 | 浏览器 UI：4031 条动画可搜索/筛选、按槽位勾装备、多视角、骨骼线框、时间轴、倍速、四种调试视图、一键诊断 |
+| `mbpreview.bat shot` | **AI** | 无头出图（自带后台服务 + 无头浏览器，不依赖常驻进程） |
+| `mbpreview.bat check` | **AI** | 动画形变巡检：边长拉伸 / 陷地 / 位移离群 / 权重和，自动报问题 |
+| `mbpreview.bat inspect` | **AI** | 从最终产物倒推体检（蒙皮 / 材质 / 贴图 / 装备遮盖） |
+| `mbpreview.bat anims` | 两者 | 搜动画（**支持中文**："走路""待机""攻击"→ 映射到分类） |
+| `mbpreview.bat bake` | 两者 | 烘焙（带跨 mod 共享缓存：骨架 / 动画目录 / 原版部件） |
+
+**排查渲染问题时最省时间的三个开关**（都经过实战）：
+```bash
+mbpreview.bat shot --mod X --debug 1            # 仅贴图 —— 排除光照干扰，判断"颜色不对"到底怪谁
+mbpreview.bat shot --mod X --only ying_skin     # 只显示匹配的网格/材质（可逗号分隔），逐层定位
+mbpreview.bat shot --mod X --no-alpha-test      # 关掉镂空，看被 discard 的部分
+```
 
 ### 12.7 ★★ 从**最终 .tpac** 读回来看（补上 §10.8 那个坑）
 
 `work/posed/*.npz` 是中间产物，打包环节的两个坑（`.mgeo` 同名覆盖、权重没量化成 0..255）
-**只有从最终文件才看得见**。现在有一条完整链路，不需要那个 mod 的工程目录：
+**只有从最终文件才看得见**。新项目**全程只吃最终产物**，刻意不读工程中间文件：
 
 ```bash
-mbtool exportmod <pack0.tpac> <outDir>          # 几何 + 材质 + 贴图原始 BC
-python preview/import_mod.py --export <outDir> --out <npzDir> --tex-out <pngDir>
-python preview/mbpreview_gui.py --posed-dir <npzDir> --tex-dir <pngDir> --anim-dir anims
+mbpreview.bat bake <mod>          # 内部就是 exportmod → 解析 → 查看器格式
+mbpreview.bat inspect <mod>       # 从烘焙产物倒推体检
 ```
 
-吊销判据（`import_mod.py` 自己会打印）：**每顶点 4 个 u8 权重之和 == 255 的占比必须 100%**、
-骨骼索引 ≤27。实测 `mb-xianjian7` 的 pack0：100.00% / max 26，且
-**逐材质面数与中间产物完全一致**（差值 4821 面恰好 = 工程 `DROP_MATS` 有意剔除的隐藏片），
-贴图解出后与打包前 PNG **逐像素平均差 0.81/255**（BC1 有损属正常）——
-这才叫"验证了最终交付的那个文件"。
+**吊销判据**（`inspect` 会打印）：**每顶点 4 个 u8 权重之和 == 255 的占比必须 100%**、
+骨骼索引 ≤27。实测 `mb-xianjian7` 的 pack0：100.00% / max 26；本项目实测
+`PitaoYingOutfits` / `LumineOutfit` 同样 100%。
 
-`exportmod` 的产物：`pack.json`（清单）+ `geo/*.bin`（自描述顶点流，含骨索引/骨权重）
-+ `tex/*.bin`（贴图原始 BC 字节 + mip 表）。解码复用 `py/bcencode.py`。
+`exportmod` 的产物：`pack.json`（清单）+ `geo/*.bin`（GDMB 自描述顶点流）+
+`tex/*.bin`（贴图原始 BC 字节 + mip 表）。解码实现见新项目 `baker/geometry.py`
+与 `baker/material.py`（BC1/3/4/5 + alpha bleed），不再依赖 `py/bcencode.py`。
+
+**GDMB 的一个必踩细节**：索引数组是 **i32（每个 4 字节）**，不是 u16；
+错当成 u16 读会让后续解析整体错位、报"残留 N 字节"。
+
 
 ### 12.8 ★★★ 预览器的四个致命细节（都会让"颜色/贴图看起来全错"）
 
@@ -688,22 +726,49 @@ python preview/mbpreview_gui.py --posed-dir <npzDir> --tex-dir <pngDir> --anim-d
 同一个 `.tpac`/工程里，"源材质名 → 贴图"和"要丢弃的材质"（`DROP_MATS`：走光保护片
 `M_ProxyHide`、眼遮挡、泪线）都值得解析出来缓存成 `work/texmap_project.json`。
 
-### 12.9 播放速度：用 `AnimationClip.duration`，别拍脑袋定 fps
+### 12.9 ★★★ 播放速度：三个坑叠在一起
 
-动画 `t` 轴（0..1267）与秒的换算**不在数据里**，唯一有据可查的是 clip 自己声明的时长
-（`mbtool cliplist` 的 `dur`，秒），而 clip 引用的正是同一个动画 guid：
+动画的 `t` 轴与秒的换算**不在数据里**，唯一有据可查的是 `AnimationClip.duration`
+（`mbtool cliplist` 的 `dur`，秒），而 clip 引用的正是同一个动画 guid。
 
 ```
-AnimationClip  inventory_idle  dur=15.000  anim=ff08c5be-…  flags=[cyclic]
+播放速率 = 有效跨度 / clip.duration
 ```
 
-⇒ `播放速率 = t_end / dur`。实测 walk_barmaid 40 t/1.30 s = 30.8、inv_movements 300/5.00 = 60、
-inventory_idle 1267/15.00 = 84.5。**这不是引擎帧率**，只是"把动画铺满 clip 时长"的比例 ——
-有它预览的**节奏**才和游戏一致。长动画（15 s 待机）整段采 48 帧 = 每秒 3 帧，很卡 ⇒
-只采前几秒（`--seconds 4`）。
+三个实测踩过的坑：
 
-（顺带：`anim_inventory_movements` 就是 `inventory_cloth_equip` / `glove_equip` 用的动画，
-`mbtool clip` 对 guid 即可确认 —— 别以为"cloth_equip 还没 dump"。）
+**坑一：不能用 `animlist` 的 `dur` 字段当帧数。**
+`SkeletalAnimation.duration` 与实际关键帧范围**不一致**：实测 `inventory_idle`
+（字段 630 / 实际 1267 帧 / clip 15 s）。拿它算会让动画慢整整一倍；
+`stand_non_combat` 更是差了 4 倍。
+
+**坑二：★★ 所有动画的第 0 帧是绑定姿势（A-pose），不是动画内容。**
+实测跳变：`inventory_idle` 0→1 相差 **162°**（手 z 从 1.107 的 A-pose 落到 0.895），
+`walk_forward_unarmed` 0→1 相差 **67°**。
+把它算进播放范围，**每循环一次角色就闪一下 A-pose**，观感上就是"节奏不对/像是倍速"。
+判据（自动识别）：
+
+```
+jump = 骨骼最大夹角(帧0, 帧1)
+rest = median(骨骼最大夹角(帧i, 帧i+1))  for i in 1..60
+若 jump > 45° 且 jump > 3×rest  ⇒  真正的起点是帧 1
+```
+
+**坑三：同一动画常被多个 clip 引用，而它们的 `duration` 未必相同**（实测 550 个动画如此）。
+盲取第一个会让速度差整数倍。打分规则：clip 名 == 动画名 > 带 `cyclic` > 名字是前缀关系。
+
+最终实现（本项目 `baker/bake.py`）：
+```python
+span = (frames - 1) - start          # start 由上面判据定（0 或 1）
+rate = span / clip_duration          # t/秒
+```
+实测：`inventory_idle` 1266/15.0 = **84.4**、`walk_forward_unarmed` 36/1.4 = 25.7、
+`run_forward_unarmed` 24/0.8 = 30.0。
+
+> 注意 `rate` 是"把动画铺满 clip 时长"的比例，**不是引擎帧率**。
+> 但即便如此，观感仍可能与游戏不同（游戏可能另有播放倍率），
+> 所以预览器一定要提供**用户可调的倍速**并记住选择，不要替使用者认定"绝对正确"。
+
 
 ### 12.10 两个纯 Python/工具链的小坑（排查时极费时间）
 
@@ -718,7 +783,7 @@ inventory_idle 1267/15.00 = 84.5。**这不是引擎帧率**，只是"把动画�
 但**都能用一条命令变成可测量的数字**：
 
 ```bash
-python mbpreview_gui.py --project <工程> --run-seconds 8
+python mbpreview_gui.py --project <工程> --run-seconds 8      # 旧 GUI，已移除；原理与教训仍适用
 # 正常输出示例：draw 469 次（58.6 fps）、upload 0.33ms/次（占 1.9%）、"帧号在动"
 # 卡死时：什么都打不出来（或一直跑到被 timeout 杀掉）
 ```
@@ -752,7 +817,8 @@ python mbpreview_gui.py --project <工程> --run-seconds 8
 **判据的选择同样重要**：验证"开了这个功能到底画出东西没有"，要用
 **开/关该功能的 A/B 差异像素**。我一开始按"数橙色像素"统计，把粉色腰带、红色
 配饰一起算进去，得出"bai 的骨骼像素比 yue 还多"的**相反结论**，多绕了一轮。
-（`preview/selftest_bones.py` 就是这条判据的可复跑版本。）
+（旧版有个 `selftest_bones.py` 做这条判据的可复跑版本，随旧预览器一并移除；
+现行实现里对应的做法是用 `mbpreview shot --only <材质>` 出 A/B 两张图再量像素差。）
 
 ### 12.13 ★★★ 动画姿势错乱的两个原因（会互相掩盖，必须成对排查）
 
@@ -807,3 +873,184 @@ pelvis 用 Z 列）。而动画 `q(0)` 侧统计是 X 7 / Y 4 / Z 12，**混乱�
 自绘按钮条即可；**画 UI 前必须清掉三维留下的 `GL_TEXTURE_2D` / `GL_ALPHA_TEST` / `GL_CULL_FACE`**，
 否则矩形会被上一张绑定的贴图调制、被 alphaTest 剪掉 —— 表现是"按钮文字在、底色不见了"。
 HUD 文字也必须和按钮**同一个正交投影**里画，否则透视矩阵会把屏幕坐标投到屏幕外（"HUD 完全看不见"）。
+
+---
+
+## 12.15 ★★★ 现行预览器（bannerlord-anim-previewer）的完整记录
+
+```
+D:\dsh-mb2-anmi-preview          https://github.com/tridkx/bannerlord-anim-previewer
+人类：preview.bat / mbpreview.bat serve      AI：shot / check / inspect / anims / bake
+```
+
+### 12.15.1 架构：烘焙器 + 查看器（两段式）
+
+```
+mod 的 pack0.tpac ─┐
+skeletons.tpac    ─┤ 烘焙器(Python)        自描述中间格式        查看器
+animations.tpac   ─┼──────────────►  data/  ──────────►  浏览器 UI（人）
+action_sets.xml   ─┤  mbtool 调用              │          CLI 出图（AI）
+原版 human.tpac   ─┘  增量缓存                  └─ MBMG 网格 / MBAN 动画 / PNG 贴图
+```
+
+**为什么必须两段式**：网格贴图是静态的可以缓存；而动画有 4052 个、每个导出约 4.7 秒，
+全量预烘焙要 5 小时以上 ⇒ **按需烘焙 + 跨 mod 共享缓存**。
+
+**查看器自写 WebGL2，零第三方依赖**。不用 three.js 的理由：游戏的材质语义
+（`blendMode` / `alphaTest` / `two_sided` / 顶点色调制）需要精确复刻，
+自己写反而更短更可控（顶点着色器里做 GPU 蒙皮，28 骨 uniform 数组）。
+
+### 12.15.2 已验证的姿态公式（可直接抄，比 §12.5 那套简单得多）
+
+```
+M_i(t)  = M_parent(t) · [ R(q_i(t)) | restLocal_i.translation ]
+根骨额外叠加 rootPosition 平移（每帧 3 个 float）
+蒙皮矩阵 = M_pose @ inv(M_bind)
+```
+
+**骨架解析**：`skeljson` 的 `rest` 是 4×4 **列主序**，平移列是**相对父骨的偏移**、
+表达在父骨局部坐标系里；世界矩阵 = 父世界 @ 本骨 rest（标准层次相乘）。
+
+**自检判据**（数值不对就是骨架选错或矩阵约定错了）：
+```
+脚趾 z ≈ 0（踩地）   头 z ≈ 1.57   左右手 x 近似对称
+```
+
+**动画语义的判定实验**（本项目做过，结论明确）：
+
+| 假设 | 与 bind pose 的旋转偏差 |
+|---|---|
+| `q` 是世界绝对朝向 | 83°~180° ✗ 否掉 |
+| **`q` 是相对父骨的局部旋转** | **0°~12°** ✓ |
+
+**走路动画的验收数值**（正确实现的水平）：左右踝 y 交替 ±0.4m、抬脚 27cm、
+手臂从 A-pose 的 x=0.650 收回到自然摆臂 x=0.26~0.34、脚底 z≈0.002。
+
+### 12.15.3 ★★★ 蒙皮矩阵的乘序：一个只会在动起来时暴露的坑
+
+```
+正确:  skin_i = M_pose_i @ inv(M_bind_i)
+写反:  skin_i = inv(M_bind_i) @ M_pose_i      ← 症状：顶点被甩到 2 米外
+```
+
+**为什么极难发现**：在 bind pose 下 `M_pose == M_bind`，两种写法**都退化成单位阵**，
+于是所有"t=0 自检"全绿、顶点偏差 0.0002mm。
+**只有 t>0 的帧才会露馅**（实测最大顶点位移 2042mm、边长比 12.5 倍）。
+
+> ★ 与 §12.4 同一条教训的两面：**蒙皮类验证一律用 t>0 的帧**。
+
+### 12.15.4 ★★ 装备遮盖：`covers_*` 不复刻就等于白做
+
+Bannerlord 的角色不是整体网格，而是「原版皮肤部件 + 若干装备件」按槽位拼起来的。
+装备的 `covers_body` / `covers_hands` / `covers_legs` / `covers_head` **不参与渲染**，
+而是被反序列化成 `MeshesMask`，由原生代码决定隐藏哪些原版皮肤网格。
+
+原版部件来自 `skins.xml`（`Modules/Native/ModuleData/skins.xml`）：
+
+| 字段 | 用途 |
+|---|---|
+| `body_meta_mesh` / `body_meta_mesh_shoulders` | 躯干 / 肩 |
+| `legs_mesh` / `hands_mesh` / `face_meta_mesh` | 脚 / 手 / 头脸 |
+| `underwear_bottom_mesh` / `underwear_top_mesh` | 内衣 |
+
+全部在 `Modules/Native/EmAssetPackages/human/human.tpac`（17 个 metamesh、16MB、
+导出只要 0.22 秒 ⇒ **全量导出即可**）。身体材质跨包在 `mat1/body_materials/`。
+
+**两个必须做对的细节**：
+1. **`covers_*` 是按语义（body/hands/…）遮的，不是按网格名。**
+   拿网格名 `body_male_a` 当 key 去匹配 `hidden.has('body')`，永远匹配不上 ——
+   表现就是"原版身体永远露着"或"永远不露"。
+2. **只加载当前体型用到的那几个网格**。human.tpac 里 male/female/kid 全都有，
+   全量加载会让**男女两具身体同时出现**（实测截图就是"穿裙子的壮汉"）。
+
+**验收**：装备前后绘制数会明显变化（实测 41 → 19）；把装备只留一件（如只穿鞋），
+必须能看到原版身体大面积露出来 —— 这正是实机最容易踩的坑。
+
+### 12.15.5 ★★ 光照量必须配平到 ≈1.0
+
+```
+颜色 = 贴图 × (环境光 + 直射光·N·L) + 高光
+```
+实测：环境 + 直射**总量只有 0.55** 时，浅肤色贴图被压成**灰蓝色**
+（看起来像"贴图错了"，而切到 `--debug 1` 仅贴图模式又完全正常 —— 极易误判）。
+反过来总量 >1 会把深色贴图抬成灰白。
+
+**校准方法**：分别渲一张 `--debug 1`（仅贴图）和一张正常光照，对比同一像素的颜色；
+或直接量"十来个已知材质在光照后与贴图的平均像素差"。
+
+光照参数可以直接从游戏大气 XML 取：
+`Modules/Native/Atmospheres/item_scene_atmosphere.xml`（**装备页场景**）
+```
+sun_altitude=70  sun_intesity=0.700  sun_color=1.000,0.932,0.891
+global_ambient fog_ambient_color=0.517,0.708,1.000   env_map=mp_ruins_2_envmap
+```
+游戏另有延迟渲染管线与后处理（曝光 −4EV、bloom、SSAO），预览器不移植这部分 ——
+**明暗关系接近，但不等于实机截图**，这一点要如实告知使用者。
+
+### 12.15.6 ★★ UV 的 V 轴：用统计判据定，别靠经验
+
+本源是 **top-origin**，而 WebGL 的 `glTexImage2D` 第一行数据正好落在 `t=0`
+⇒ **不翻**。判据（对角色贴图特别有效，因为大片是 alpha=0 的空白区）：
+
+```
+统计"UV 采样落在贴图不透明区的顶点占比"：
+  不翻 V → 89.6%      翻 V → 4.3%        ⇒ 不翻
+```
+（实测 `ying_skin_d` 只有 11.8% 的像素不透明，所以 V 轴错了会立刻掉到个位数。）
+
+⚠️ Blender 侧结论相反（Blender 的 v=0 在图片底部），**两边不能互抄**。
+
+### 12.15.7 ★★★ 怎么判断"渲染到底对不对"
+
+**别盯着整体画面猜，做逐层对比**。本项目用过的完整手法：
+
+1. **`--only <材质>` 逐层渲染**：把每个材质单独出一张图。
+   实测 `ying_cloth` 单独渲染完全干净（衣服颜色全对），说明"肩膀发黑"不是它造成的。
+2. **`--no-alpha-test`**：关掉镂空，看被 discard 的部分长什么样。
+   实测关掉后深灰**依旧存在** ⇒ 与 alphaTest 无关，立刻排除一个方向。
+3. **像素 diff**：两版渲染结果求差，量"差异像素占比 + 差异区域颜色"。
+   实测只有 0.09% 差异，且颜色是"背景 → 肤色" ⇒ 叠加是正确的，没有 bug。
+4. **`--debug 1` 仅贴图**：排除光照。
+
+**结论**：那次"肩膀深灰"最终确认是 **`ying_cloth_d` 贴图在该 UV 区域的真实颜色**
+（各材质单独渲染都正常），不是渲染错误 —— 但如果没做逐层对比，很容易误改渲染代码。
+
+### 12.15.8 新踩的坑（与旧版完全不同的一类）
+
+| 坑 | 症状 | 做法 |
+|---|---|---|
+| **错误层 appendChild 无限堆叠** | 切到加载失败的动画 → 全屏错误层永久盖住角色，反复触发表现为"角色忽隐忽现" | 错误面板必须**复用同一个 DOM 并给关闭按钮**；单个资源失败只弹 toast，不要 fatal |
+| **贴图请求无超时** | `onload`/`onerror` 都不触发时，`await` 永久挂起 ⇒ 加载遮罩永不消失，角色一直看不见 | 给图片加载加 `setTimeout` 兜底 |
+| **骨骼 uniform 数组开太大** | `mat4[64]` = 256 个 vec4，正好顶到 WebGL2 的 `MAX_VERTEX_UNIFORM_VECTORS` 最低保证值；弱显卡链接失败后 `getUniformLocation` 返回 null、uniform 上传被**静默忽略** | 按骨架实际需要开（人形固定 28）；上传前判 null |
+| **`preserveDrawingBuffer`** | 部分驱动上与抗锯齿打架导致闪烁 | 除非真需要读回像素，否则关掉 |
+| **.bat 里的 UTF-8 中文注释** | 控制台代码页是 GBK ⇒ 字节错位 ⇒ 可能吐出 `&` `|` `>` 被当命令分隔符，报 `'疆' 不是内部或外部命令` | **bat 一律纯 ASCII**，中文提示交给 Python 输出 |
+| **`gl.SAMPLE_ALPHA_TO_COVERAGE`** | 镂空边缘的 alpha 在阈值附近时，mipmap 采样让它逐帧时有时无（边缘闪烁） | 对 alphaTest 材质启用 |
+| **resize 到 0 尺寸** | 面板折叠的瞬间量到 0，把画布设成 1×1 ⇒ 画面"消失" | 小于阈值就不重设画布 |
+| **fatal 之后 `setLoading(false)` 不执行** | 抛异常导致加载遮罩留在屏幕上 | 遮罩的开关要放在 `finally` 或外层 catch |
+
+### 12.15.9 给 AI 用的自动化闭环
+
+预览器的 CLI 是**给 AI 判读**而设计的，核心是让"改参数 → 重建 → 出图 → 检查"
+能全自动跑：
+
+```bash
+mbpreview.bat bake <mod>                       # 重建（走缓存，几秒）
+mbpreview.bat check <mod> --frames 6 --max 12  # 形变巡检，自动报问题
+mbpreview.bat shot --mod <mod> --anims a,b --frames 0,60 --views front,left -o out/
+```
+
+`check` 的判据（都经过校准，避免误报）：
+
+| 判据 | 阈值 | 含义 |
+|---|---|---|
+| 边长拉伸 p999 | > 4 | 某根骨的蒙皮变换异常（权重映射错到别的骨） |
+| 顶点 z 最低 | < −6cm | 陷地 |
+| 位移离群 | max > 1m **且** > 6×p99 | 个别顶点被甩飞 |
+| 权重和 | ≠255 | 打包环节把 float 截断成了 u8 |
+| 骨索引 | > 27 | 超出人形骨架 |
+
+> ★ **位移不能单独当判据**：`jump` 这类单帧姿势动画与 bind pose 差异本来就大
+> （实测 p99 就有 2.21m），必须用"离群度"（max 相对 p99）而不是绝对值。
+> 同理**边长统计只看 >1cm 的边** —— 毫米级短边在权重过渡区本就会被相对拉伸，
+> 用比值判会误报（实测把 2mm 的边算出 12 倍"拉伸"）。
+
